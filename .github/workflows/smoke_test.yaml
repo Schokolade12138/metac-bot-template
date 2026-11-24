@@ -1,0 +1,45 @@
+name: Smoke test
+
+# Manual end-to-end test: unit tests, then real forecasts on a few questions of
+# the bot-testing-area tournament (which exists for this and awards nothing).
+on:
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "How many test questions to forecast"
+        default: "4"
+
+concurrency:
+  group: smoke-test
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  smoke_test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.3.0
+        with:
+          version: "0.13.1"
+          enable-cache: true
+      - name: Install dependencies
+        run: uv sync --locked
+      - name: Unit tests
+        continue-on-error: true
+        run: uv run python -m unittest discover -s tests -t .
+      - name: Forecast test questions
+        run: uv run python run_bot.py --mode test_questions --limit "${{ inputs.limit || 4 }}"
+        env:
+          METACULUS_TOKEN: ${{ secrets.METACULUS_TOKEN }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          ASKNEWS_CLIENT_ID: ${{ secrets.ASKNEWS_CLIENT_ID }}
+          ASKNEWS_SECRET: ${{ secrets.ASKNEWS_SECRET }}
