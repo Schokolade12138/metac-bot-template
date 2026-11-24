@@ -1,0 +1,54 @@
+name: Check setup
+
+# Manual check that the repository is ready to forecast. It makes no forecasts
+# and prints no secrets: only whether the Metaculus token works (and which bot
+# account it belongs to) and which free GitHub Models this repository can call.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  models: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Metaculus token
+        env:
+          METACULUS_TOKEN: ${{ secrets.METACULUS_TOKEN }}
+        run: |
+          if [ -z "$METACULUS_TOKEN" ]; then
+            echo "::error::The METACULUS_TOKEN secret is missing"
+            exit 1
+          fi
+          code=$(curl -sS -o me.json -w "%{http_code}" \
+            -H "Authorization: Token $METACULUS_TOKEN" \
+            https://www.metaculus.com/api/users/me/)
+          echo "HTTP $code"
+          jq '{id, username, is_bot}' me.json || true
+          rm -f me.json
+          test "$code" = "200"
+
+      - name: GitHub Models catalog
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -sS -o catalog.json -w "HTTP %{http_code}\n" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            https://models.github.ai/catalog/models
+          jq -r '.[] | [.id, .rate_limit_tier, (.limits.max_input_tokens|tostring), (.limits.max_output_tokens|tostring)] | @tsv' catalog.json | head -200 || head -c 500 catalog.json
+
+      - name: GitHub Models inference
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -sS -w "\nHTTP %{http_code}\n" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Content-Type: application/json" \
+            https://models.github.ai/inference/chat/completions \
+            -d '{"model":"openai/gpt-4.1-mini","messages":[{"role":"user","content":"Reply with the single word: ok"}],"max_tokens":5}' | tail -c 700
