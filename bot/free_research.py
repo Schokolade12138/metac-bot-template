@@ -13,6 +13,7 @@ import json
 import logging
 import re
 import xml.etree.ElementTree as ElementTree
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -24,6 +25,8 @@ logger = logging.getLogger(__name__)
 
 _TIMEOUT = httpx.Timeout(20.0, connect=10.0)
 _HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; forecasting-research-bot)"}
+# What happened to each lookup in this process, for the run summary.
+SOURCE_STATS: Counter[str] = Counter()
 MAX_HEADLINES = 30
 MAX_MARKETS_PER_SOURCE = 6
 _STOPWORDS = set(
@@ -106,9 +109,12 @@ async def write_queries(
         """
     )
     try:
-        return parse_queries(await llm.invoke(prompt), question.question_text)
+        queries = parse_queries(await llm.invoke(prompt), question.question_text)
+        SOURCE_STATS["search queries: written by model"] += 1
+        return queries
     except Exception as error:
         logger.warning(f"Query writing failed, using keywords: {type(error).__name__}")
+        SOURCE_STATS[f"search queries: keyword fallback ({type(error).__name__})"] += 1
         return fallback_queries(question.question_text)
 
 
@@ -287,9 +293,12 @@ async def gather_free_research(
     for (name, _), result in zip(jobs, results):
         if isinstance(result, BaseException):
             logger.warning(f"{name} lookup failed: {type(result).__name__}: {result}")
+            SOURCE_STATS[f"{name}: failed ({type(result).__name__})"] += 1
             if name not in failed:
                 failed.append(name)
-        elif name == "Google News":
+            continue
+        SOURCE_STATS[f"{name}: ok" if result else f"{name}: ok but empty"] += 1
+        if name == "Google News":
             headlines += result
         else:
             by_venue[name] += result

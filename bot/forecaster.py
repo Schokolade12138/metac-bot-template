@@ -14,6 +14,7 @@ import asyncio
 import itertools
 import logging
 import os
+from collections import Counter
 from contextvars import ContextVar
 from typing import Any, Awaitable, Callable
 
@@ -38,8 +39,6 @@ from main import FallTemplateBot2026
 
 logger = logging.getLogger(__name__)
 
-FORECAST_ATTEMPTS = 2
-
 # The model chosen for the forecast being made in the current asyncio task. The
 # template asks get_llm("default") for its forecasting model; this lets each
 # concurrent forecast get a different one.
@@ -50,6 +49,8 @@ class TournamentBot(FallTemplateBot2026):
     def __init__(self, settings: Settings, **kwargs: Any) -> None:
         self.settings = settings
         self._forecast_cycle = itertools.cycle(settings.forecast_llms)
+        # Outcome of every forecast attempt in this run, for the run summary.
+        self.stats: Counter[str] = Counter()
         if settings.profile == "free":
             # One parsing call per forecast instead of two, to fit free quotas.
             self._structure_output_validation_samples = 1
@@ -90,6 +91,7 @@ class TournamentBot(FallTemplateBot2026):
         sections: list[str] = []
         for (name, _), result in zip(sources, results):
             if isinstance(result, BaseException):
+                self.stats[f"research failed: {name}: {type(result).__name__}"] += 1
                 logger.warning(
                     f"Research source '{name}' failed for {question.page_url}: "
                     f"{type(result).__name__}: {result}"
@@ -97,6 +99,7 @@ class TournamentBot(FallTemplateBot2026):
             elif result and result.strip():
                 sections.append(f"# {name}\n{result.strip()}")
         research = "\n\n".join(sections)[: self.settings.research_char_budget]
+        self.stats[f"research chars: {len(research) // 1000}k"] += 1
         if not research:
             research = "No research could be retrieved for this question."
         logger.info(f"Research for {question.page_url}:\n{research}")
@@ -121,19 +124,23 @@ class TournamentBot(FallTemplateBot2026):
     ) -> ReasonedPrediction[Any]:
         """Run one forecast on the next model in turn; on failure try the next one."""
         last_error: Exception | None = None
-        for attempt in range(1, FORECAST_ATTEMPTS + 1):
+        attempts = self.settings.forecast_attempts
+        for attempt in range(1, attempts + 1):
             llm = next(self._forecast_cycle)
             token = _forecast_llm.set(llm)
             try:
                 prediction = await forecast(question, prompt)
+                self.stats[f"forecast ok: {llm.model}"] += 1
                 return ReasonedPrediction(
                     prediction_value=prediction.prediction_value,
                     reasoning=f"*Forecast by {llm.model}*\n\n{prediction.reasoning}",
                 )
             except Exception as error:
                 last_error = error
+                detail = " ".join(str(error).split())[:220]
+                self.stats[f"forecast failed: {llm.model}: {type(error).__name__}: {detail}"] += 1
                 logger.warning(
-                    f"Forecast attempt {attempt}/{FORECAST_ATTEMPTS} with {llm.model} "
+                    f"Forecast attempt {attempt}/{attempts} with {llm.model} "
                     f"failed for {question.page_url}: {type(error).__name__}: {error}"
                 )
             finally:

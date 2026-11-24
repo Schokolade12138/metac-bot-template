@@ -31,6 +31,7 @@ silence_noisy_dependencies()
 from forecasting_tools import ForecastReport, MetaculusClient, MetaculusQuestion
 
 from bot.forecaster import TournamentBot
+from bot.free_research import SOURCE_STATS
 from bot.settings import Settings, resolve_settings
 
 logger = logging.getLogger("run_bot")
@@ -100,6 +101,7 @@ def write_summary(
     questions: Sequence[MetaculusQuestion],
     reports: Sequence[ForecastReport | BaseException],
     notes: Sequence[str] = (),
+    stats: dict[str, int] | None = None,
 ) -> str:
     done = [r for r in reports if isinstance(r, ForecastReport)]
     failed = [
@@ -125,11 +127,13 @@ def write_summary(
     else:
         lines.append(f"- Questions waiting for a forecast: {len(questions)}")
         lines += [f"- WAITING: {describe_question(q)}" for q in questions]
-    lines += [f"- OK: {report.question.page_url}" for report in done]
+    lines += [f"- OK: {report.question.page_url} -> {readable(report)}" for report in done]
     lines += [
         f"- FAILED: {question.page_url}: {type(error).__name__}: {str(error)[:300]}"
         for question, error in failed
     ]
+    for label, count in sorted({**(stats or {}), **SOURCE_STATS}.items()):
+        lines.append(f"- STAT x{count}: {label}")
     summary = "\n".join(lines)
     summary_path = os.getenv("GITHUB_STEP_SUMMARY")
     if summary_path:
@@ -137,6 +141,13 @@ def write_summary(
             summary_file.write(summary + "\n")
     print(summary)
     return summary
+
+
+def readable(report: ForecastReport) -> str:
+    try:
+        return " ".join(str(report.make_readable_prediction(report.prediction)).split())[:200]
+    except Exception:
+        return type(report).__name__
 
 
 def run(args: argparse.Namespace) -> int:
@@ -174,7 +185,7 @@ def run(args: argparse.Namespace) -> int:
     )
     reports = asyncio.run(forecast_all(bot, questions, settings.question_concurrency))
     bot.log_report_summary(reports, raise_errors=False)
-    write_summary(args.mode, settings, questions, reports, notes)
+    write_summary(args.mode, settings, questions, reports, notes, dict(bot.stats))
 
     succeeded = sum(isinstance(report, ForecastReport) for report in reports)
     return 1 if args.strict and succeeded == 0 else 0

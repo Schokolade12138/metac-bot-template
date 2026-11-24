@@ -46,7 +46,15 @@ FREE_FORECAST_MODELS = [
     "openrouter/baidu/ernie-5.5-flash-preview:free",
     "openrouter/inclusionai/ling-3.2-flash:free",
 ]
-FREE_UTILITY_MODEL = "openrouter/google/gemma-4-31b-it:free"
+# Free endpoints get rate-limited upstream without warning, so the utility model
+# (parsing, search queries) has fallbacks that OpenRouter tries in order.
+FREE_UTILITY_MODEL = "openrouter/nvidia/nemotron-3.5-lightning:free"
+FREE_UTILITY_FALLBACKS = [
+    "openrouter/google/gemma-4-31b-it:free",
+    "openrouter/openrouter/free",
+]
+FREE_FORECAST_ATTEMPTS = 3
+PAID_FORECAST_ATTEMPTS = 2
 FREE_PREDICTIONS_PER_QUESTION = 3
 FREE_RESEARCH_CHAR_BUDGET = 20_000
 PAID_RESEARCH_CHAR_BUDGET = 40_000
@@ -79,6 +87,7 @@ class Settings:
     predictions_per_question: int
     research_char_budget: int
     question_concurrency: int
+    forecast_attempts: int = 2
     credits_remaining_usd: float | None = None
     notes: list[str] = field(default_factory=list)
     skip_reason: str | None = None
@@ -88,8 +97,18 @@ class Settings:
         return [llm.model for llm in self.forecast_llms]
 
 
-def _openrouter_llm(model: str, *, reasoning: bool, timeout: int) -> GeneralLlm:
+def _openrouter_llm(
+    model: str,
+    *,
+    reasoning: bool,
+    timeout: int,
+    fallbacks: list[str] | None = None,
+) -> GeneralLlm:
     kwargs: dict = {"timeout": timeout, "allowed_tries": 2}
+    if fallbacks:
+        # OpenRouter's own fallback routing: tried in order when the main model
+        # errors or is rate-limited. Takes OpenRouter ids, without the prefix.
+        kwargs["models"] = [name.removeprefix("openrouter/") for name in fallbacks]
     if reasoning:
         kwargs["reasoning_effort"] = _env("BOT_REASONING_EFFORT") or "high"
     else:
@@ -159,6 +178,7 @@ def _paid_settings(api_key: str) -> Settings:
         ),
         research_char_budget=PAID_RESEARCH_CHAR_BUDGET,
         question_concurrency=3,
+        forecast_attempts=PAID_FORECAST_ATTEMPTS,
         credits_remaining_usd=credits,
         notes=notes,
         skip_reason=skip_reason,
@@ -174,7 +194,10 @@ def _free_settings() -> Settings:
             for model in forecast_models
         ],
         utility_llm=_openrouter_llm(
-            _env("BOT_UTILITY_MODEL") or FREE_UTILITY_MODEL, reasoning=False, timeout=120
+            _env("BOT_UTILITY_MODEL") or FREE_UTILITY_MODEL,
+            reasoning=False,
+            timeout=120,
+            fallbacks=FREE_UTILITY_FALLBACKS,
         ),
         search_llm=None,
         predictions_per_question=int(
@@ -182,4 +205,5 @@ def _free_settings() -> Settings:
         ),
         research_char_budget=FREE_RESEARCH_CHAR_BUDGET,
         question_concurrency=1,
+        forecast_attempts=FREE_FORECAST_ATTEMPTS,
     )
