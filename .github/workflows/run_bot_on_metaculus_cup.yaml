@@ -1,9 +1,8 @@
 name: Forecast on Metaculus Cup
 
+# Manual only in this fork: the Metaculus Cup is not part of the bot tournament.
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "0 0 */2 * *" # runs at midnight every 2 days
 
 # Add concurrency group to prevent parallel runs
 concurrency:

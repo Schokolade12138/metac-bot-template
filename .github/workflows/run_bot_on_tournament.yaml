@@ -1,9 +1,10 @@
 name: Forecast on new AI tournament questions
 
+# The template bot no longer runs on a schedule in this fork. Scheduled
+# forecasting is done by .github/workflows/forecast.yaml; this stays as a
+# manual fallback only.
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "7,27,47 * * * *" # every 20 min, offset off the hour. Make sure to skip already-forecasted questions!
 
 # Add concurrency group to prevent parallel runs
 concurrency:
